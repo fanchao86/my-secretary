@@ -205,7 +205,7 @@ if __name__ == "__main__":
         results = search(query, vector_path, top_k)
         print(json.dumps(results, ensure_ascii=False, indent=2))
     elif sys.argv[1] == "add":
-        entry = json.loads(sys.argv[3]) if len(sys.argv) > 3 else {}
+        entry = json.loads(sys.stdin.read())
         add_entry(vector_path, entry)
         print("OK")
     elif sys.argv[1] == "remove":
