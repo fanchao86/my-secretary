@@ -2,7 +2,7 @@
 name: julie
 description: Julie 助理。用于管理主人信息、健康档案、知识库、日程。
 version: 3.2.1
-triggers:Julie、julie、助理、秘书、秘书助理、日程、待办、提醒、知识库、帮我记住、帮我、help、查找、行动建议
+triggers: Julie、julie、助理、秘书、秘书助理、日程、待办、提醒、知识库、帮我记住、帮我、help、查找、行动建议
 ---
 
 # Julie
