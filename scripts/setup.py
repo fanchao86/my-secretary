@@ -7,6 +7,7 @@ Julie 环境检查与安装脚本
 - 检查数据目录结构
 """
 
+import json
 import subprocess
 import sys
 import os
@@ -56,7 +57,10 @@ def install_jieba():
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
-        import jieba  # noqa: F401
+        subprocess.run(
+            [sys.executable, "-c", "import jieba"],
+            check=True, capture_output=True
+        )
         print(f"  {PASS} jieba 安装成功")
         return True
     except Exception as e:
@@ -127,6 +131,16 @@ def verify_search():
         print(f"  {WARN} 跳过（vector_index.json 不存在）")
         return True
 
+    # 检查索引是否为空
+    try:
+        with open(index_path, "r", encoding="utf-8") as f:
+            idx_data = json.load(f)
+        if not idx_data.get("entries"):
+            print(f"  {WARN} 跳过（索引为空，首次使用后将自动填充）")
+            return True
+    except Exception:
+        pass
+
     try:
         result = subprocess.run(
             [sys.executable, script_path, "search", index_path, "测试", "1"],
@@ -143,6 +157,29 @@ def verify_search():
         return False
 
 
+def check_migration():
+    """检查并执行数据迁移"""
+    migrate_path = os.path.join(SCRIPT_DIR, "migrate.py")
+    if not os.path.exists(migrate_path):
+        print(f"  {WARN} 迁移脚本不存在")
+        return True
+    try:
+        result = subprocess.run(
+            [sys.executable, migrate_path],
+            capture_output=True, text=True, timeout=30
+        )
+        if result.returncode == 0:
+            print(f"  {PASS} 数据迁移完成")
+            return True
+        else:
+            print(f"  {WARN} 迁移未完成，可稍后手动执行: python3 scripts/migrate.py")
+            print(f"      {result.stderr.strip()}")
+            return False
+    except Exception as e:
+        print(f"  {WARN} 迁移检查失败: {e}")
+        return True  # 不阻塞安装流程
+
+
 def main():
     print("=" * 50)
     print("  Julie 环境检查与安装")
@@ -152,12 +189,12 @@ def main():
     results = {}
 
     # 1. Python
-    print("【1/5】Python 环境")
+    print("【1/6】Python 环境")
     results["python"] = check_python()
     print()
 
     # 2. jieba
-    print("【2/5】jieba 依赖")
+    print("【2/6】jieba 依赖")
     jieba_ok = check_jieba()
     if not jieba_ok:
         jieba_ok = install_jieba()
@@ -165,17 +202,22 @@ def main():
     print()
 
     # 3. 搜索脚本
-    print("【3/5】搜索脚本")
+    print("【3/6】搜索脚本")
     results["script"] = check_search_script()
     print()
 
     # 4. 数据目录
-    print("【4/5】数据目录")
+    print("【4/6】数据目录")
     results["data"] = check_data_dir()
     print()
 
-    # 5. 搜索验证
-    print("【5/5】搜索功能验证")
+    # 5. 数据迁移
+    print("【5/6】数据迁移")
+    results["migration"] = check_migration()
+    print()
+
+    # 6. 搜索验证
+    print("【6/6】搜索功能验证")
     results["search"] = verify_search()
     print()
 
@@ -186,7 +228,7 @@ def main():
         print(f"  {GREEN}全部通过！Julie 已就绪。{RESET}")
     else:
         print(f"  {YELLOW}部分项需关注，详见上方。{RESET}")
-        if not results["jieba"]:
+        if not results.get("jieba", True):
             print(f"  提示: 搜索将使用 bigram 降级模式，精度较低")
             print(f"  建议: pip3 install jieba")
     print("=" * 50)

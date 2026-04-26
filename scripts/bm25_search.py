@@ -13,7 +13,7 @@ import re
 import sys
 import os
 from datetime import datetime
-from typing import List, Dict
+from typing import Dict, List, Tuple
 
 try:
     import jieba
@@ -78,19 +78,22 @@ def tokenize(text: str) -> List[str]:
         return tokens
 
 
-def build_inverted_index(entries: List[Dict], entry_map: Dict[str, Dict]) -> Dict[str, List[Dict]]:
-    """构建倒排索引：term -> [(doc_id, tf)]"""
+def build_inverted_index(entries: List[Dict]) -> Tuple[Dict[str, List[Dict]], Dict[str, Dict]]:
+    """构建倒排索引：term -> [(doc_id, tf)]，返回 (inverted, entry_map)"""
     inverted: Dict[str, List[Dict]] = {}
+    entry_map: Dict[str, Dict] = {}
     for entry in entries:
         doc_id = entry["id"]
         entry_map[doc_id] = entry
-        tokens = entry.get("tokens") or tokenize(entry["text"])
+        if "tokens" not in entry:
+            entry["tokens"] = tokenize(entry["text"])
+        tokens = entry["tokens"]
         token_counts: Dict[str, int] = {}
         for t in tokens:
             token_counts[t] = token_counts.get(t, 0) + 1
         for term, tf in token_counts.items():
             inverted.setdefault(term, []).append({"doc_id": doc_id, "tf": tf})
-    return inverted
+    return inverted, entry_map
 
 
 def compute_idf(inverted_index: Dict, num_docs: int) -> Dict[str, float]:
@@ -103,7 +106,7 @@ def compute_idf(inverted_index: Dict, num_docs: int) -> Dict[str, float]:
 def compute_avgdl(entries: List[Dict]) -> float:
     if not entries:
         return 0
-    total = sum(len(e.get("tokens") or tokenize(e["text"])) for e in entries)
+    total = sum(len(e["tokens"]) for e in entries)
     return total / len(entries)
 
 
@@ -148,9 +151,9 @@ def bm25_search(
             entry = entry_map.get(doc_id)
             if not entry:
                 continue
-            doc_len = len(entry.get("tokens") or tokenize(entry["text"]))
+            doc_len = len(entry["tokens"])
             score = idf_val * (tf * (K1 + 1)) / (tf + K1 * (1 - B + B * doc_len / avgdl))
-            doc_scores[doc_id] = doc_scores.get(doc_id, 0) + score * tw * (0.5 + 0.5 * qtf / max(qtf, 1))
+            doc_scores[doc_id] = doc_scores.get(doc_id, 0) + score * tw
 
     sorted_ids = sorted(doc_scores.items(), key=lambda x: x[1], reverse=True)
     result = []
@@ -186,24 +189,34 @@ def _now_date() -> str:
 
 def _normalize_entry(entry: Dict) -> Dict:
     """将外部传入的 entry 规范化为精简格式"""
-    text = entry.get("text") or entry.get("originalText", "")
+    text = entry["text"]
     tokens = entry.get("tokens") or tokenize(text)
     return {"id": entry["id"], "text": text, "tokens": tokens}
 
 
 def add_entry(vector_index_path: str, entry: Dict) -> None:
     data = load_vector_index(vector_index_path)
+    entry_id = entry.get("id", "")
+    if any(e["id"] == entry_id for e in data["entries"]):
+        return
     data["entries"].append(_normalize_entry(entry))
     data["updateDate"] = _now_date()
     save_vector_index(vector_index_path, data)
 
 
-def add_entries(vector_index_path: str, new_entries: List[Dict]) -> None:
+def add_entries(vector_index_path: str, new_entries: List[Dict]) -> int:
     data = load_vector_index(vector_index_path)
+    existing_ids = {e["id"] for e in data["entries"]}
+    added = 0
     for entry in new_entries:
+        if entry.get("id", "") in existing_ids:
+            continue
         data["entries"].append(_normalize_entry(entry))
+        existing_ids.add(entry["id"])
+        added += 1
     data["updateDate"] = _now_date()
     save_vector_index(vector_index_path, data)
+    return added
 
 
 def remove_entry(vector_index_path: str, entry_id: str) -> bool:
@@ -234,8 +247,7 @@ def search(query: str, vector_index_path: str, top_k: int = 5) -> List[Dict]:
     entries = data.get("entries", [])
     if not entries:
         return []
-    entry_map: Dict[str, Dict] = {}
-    inverted = build_inverted_index(entries, entry_map)
+    inverted, entry_map = build_inverted_index(entries)
     idf = compute_idf(inverted, len(entries))
     avgdl = compute_avgdl(entries)
     return bm25_search(query, entries, inverted, idf, avgdl, entry_map, top_k)
@@ -250,10 +262,60 @@ def rebuild_index(vector_index_path: str, source_entries: List[Dict]) -> None:
     })
 
 
+def _parse_json_arg(arg: str) -> dict:
+    """解析单条 JSON，异常时退出"""
+    try:
+        return json.loads(arg)
+    except json.JSONDecodeError as e:
+        print(f"JSON 解析失败: {e}", file=sys.stderr)
+        sys.exit(1)
+
+
+def _parse_json_list_arg(arg: str) -> list:
+    """解析 JSON 数组，异常时退出"""
+    try:
+        data = json.loads(arg)
+        if not isinstance(data, list):
+            print("需要 JSON 数组格式", file=sys.stderr)
+            sys.exit(1)
+        return data
+    except json.JSONDecodeError as e:
+        print(f"JSON 解析失败: {e}", file=sys.stderr)
+        sys.exit(1)
+
+
+def _read_json_stdin() -> dict:
+    """从 stdin 读取单条 JSON"""
+    try:
+        return json.loads(sys.stdin.read())
+    except json.JSONDecodeError as e:
+        print(f"stdin JSON 解析失败: {e}", file=sys.stderr)
+        sys.exit(1)
+
+
+def _read_json_list_stdin() -> list:
+    """从 stdin 读取 JSON 数组"""
+    try:
+        data = json.loads(sys.stdin.read())
+        if not isinstance(data, list):
+            print("stdin 输入需要 JSON 数组格式", file=sys.stderr)
+            sys.exit(1)
+        return data
+    except json.JSONDecodeError as e:
+        print(f"stdin JSON 解析失败: {e}", file=sys.stderr)
+        sys.exit(1)
+
+
 if __name__ == "__main__":
     if len(sys.argv) < 3:
         print("Usage: bm25_search.py <command> <vector_index_path> [args...]")
-        print("Commands: search <query> [top_k], add [JSON | stdin], remove <entry_id>, rebuild [JSON | stdin]")
+        print("Commands:")
+        print("  search <query> [top_k]                搜索")
+        print("  add [JSON | stdin]                    添加单条 entry")
+        print("  add-batch [JSON | stdin]              批量添加 entries")
+        print("  remove <entry_id>                     删除单条 entry")
+        print("  remove-batch <id1,id2,...>            批量删除 entries")
+        print("  rebuild [JSON | stdin]                全量重建索引")
         sys.exit(1)
 
     vector_path = sys.argv[2]
@@ -265,19 +327,31 @@ if __name__ == "__main__":
         print(json.dumps(results, ensure_ascii=False, indent=2))
     elif sys.argv[1] == "add":
         if len(sys.argv) > 3:
-            entry = json.loads(sys.argv[3])
+            entry = _parse_json_arg(sys.argv[3])
         else:
-            entry = json.loads(sys.stdin.read())
+            entry = _read_json_stdin()
         add_entry(vector_path, entry)
         print("OK")
+    elif sys.argv[1] == "add-batch":
+        if len(sys.argv) > 3:
+            entries = _parse_json_list_arg(sys.argv[3])
+        else:
+            entries = _read_json_list_stdin()
+        added = add_entries(vector_path, entries)
+        print(f"OK, added={added}")
     elif sys.argv[1] == "remove":
         entry_id = sys.argv[3] if len(sys.argv) > 3 else ""
         ok = remove_entry(vector_path, entry_id)
         print("OK" if ok else "NOT_FOUND")
+    elif sys.argv[1] == "remove-batch":
+        raw = sys.argv[3] if len(sys.argv) > 3 else ""
+        ids = [i.strip() for i in raw.split(",") if i.strip()]
+        removed = remove_entries(vector_path, ids)
+        print(f"OK, removed={removed}")
     elif sys.argv[1] == "rebuild":
         if len(sys.argv) > 3:
-            entries = json.loads(sys.argv[3])
+            entries = _parse_json_list_arg(sys.argv[3])
         else:
-            entries = json.loads(sys.stdin.read())
+            entries = _read_json_list_stdin()
         rebuild_index(vector_path, entries)
         print("OK")

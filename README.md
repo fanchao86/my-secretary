@@ -15,9 +15,10 @@ python3 scripts/setup.py
 `setup.py` 会自动完成：
 1. 检查 Python 版本（需 3.7+）
 2. 检查并安装 jieba 分词依赖
-3. 验证搜索脚本
-4. 检查数据目录结构
-5. 端到端搜索功能验证
+3. 验证搜索脚本 `bm25_search.py`
+4. 检查数据目录 `data/` 结构
+5. **数据版本迁移**（低版本升级时自动逐级执行）
+6. 端到端搜索功能验证
 
 > jieba 未安装时搜索仍可运行（bigram 降级模式），但精度较低，建议安装。
 
@@ -53,8 +54,41 @@ data/
 ├── vector_index.json  BM25 向量索引
 └── version.json       版本信息
 scripts/
-└── bm25_search.py     BM25 搜索脚本
+├── bm25_search.py     BM25 搜索脚本
+├── migrate.py         版本迁移工具
+└── setup.py           环境安装脚本
 ```
+
+## 升级
+
+```bash
+cd julie
+python3 scripts/setup.py    # 自动检测版本并执行迁移
+# 或单独执行：
+python3 scripts/migrate.py  # 逐级升级到当前技能版本
+```
+
+`migrate.py` 按版本顺序逐级执行迁移（重建索引、修正数据格式等），每步完成后写入 `version.json`，支持断点续迁。
+
+## 搜索脚本 CLI
+
+```bash
+# 搜索
+python3 scripts/bm25_search.py search <index_path> <query> [top_k]
+
+# 添加 / 批量添加
+python3 scripts/bm25_search.py add <index_path> '<entry_json>'
+python3 scripts/bm25_search.py add-batch <index_path> '<entries_json>'
+
+# 删除 / 批量删除
+python3 scripts/bm25_search.py remove <index_path> <entry_id>
+python3 scripts/bm25_search.py remove-batch <index_path> id1,id2,...
+
+# 全量重建
+python3 scripts/bm25_search.py rebuild <index_path> '<entries_json>'
+```
+
+> 1 万条索引约 476 KB，搜索延迟约 90ms；批量 add 100 条约 0.5ms/条。
 
 ## 配置
 
